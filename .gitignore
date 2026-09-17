@@ -1,0 +1,20 @@
+# dependencies
+/node_modules
+
+# next.js
+/.next/
+/out/
+
+# environment (never commit TDX credentials)
+.env
+.env.local
+.env.*.local
+
+# misc
+.DS_Store
+*.pem
+*.tsbuildinfo
+next-env.d.ts
+
+# 預先下載的 TDX 圖資（由 npm run prefetch:tdx 產生，可重建）
+/data/tdx/

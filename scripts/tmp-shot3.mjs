@@ -1,0 +1,11 @@
+import { chromium } from "playwright";
+const browser = await chromium.launch();
+const page = await browser.newPage({ viewport: { width: 1100, height: 850 }, deviceScaleFactor: 2 });
+await page.goto("http://localhost:3000/?lat=24.1740&lon=120.6810&zoom=14", { waitUntil: "domcontentloaded" });
+await page.waitForSelector(".route-item", { timeout: 60000 });
+await page.getByLabel("只顯示目前選擇路線").uncheck();
+await page.waitForFunction(() => /已顯示合併路網/.test(document.body.textContent ?? ""), null, { timeout: 240000 });
+await page.waitForTimeout(3000);
+await page.screenshot({ path: "/tmp/opencode/merge26.png", clip: { x: 380, y: 250, width: 460, height: 360 } });
+console.log("saved");
+await browser.close();
