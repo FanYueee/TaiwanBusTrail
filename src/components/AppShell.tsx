@@ -19,7 +19,7 @@ import {
   buildRoadNetwork,
   computeCoverage,
   createToleranceMatcher,
-  dedupeByProximity,
+  fuseRoutesByStops,
   pathLengthMeters,
   sliceShapeBetweenStops,
   type CoverageChunk,
@@ -490,7 +490,8 @@ export default function AppShell() {
     settings.directionFilter,
   ]);
 
-  // 路網合併：把所有候選路線的幾何合成一張連續路網（每條路只畫一次、節點相連）
+  // 路網合併：以「連續站牌區間」為單位融合各路線幾何，再串成連續路網
+  // （站牌是共用錨點，同一站的線段端點會完全重合，路口不會有缺口）
   useEffect(() => {
     if (!showAllRoutes || !allData || !allChunks || !settings.mergeOverlappingRoutes) {
       setAllNetwork((previous) => (previous === null ? previous : null));
@@ -506,26 +507,33 @@ export default function AppShell() {
       await new Promise((resolve) => setTimeout(resolve, 30));
       if (cancelled) return;
 
-      const inputs = candidateRoutes
+      const fusionRoutes = candidateRoutes
         .map((route) => {
           const key = routeKey(route.routeUID, route.direction);
-          return { key, chunks: allChunks[key] ?? [] };
+          const shape = allData.shapes[key]?.geometry;
+          const stops = allData.stops[key];
+          if (!shape || shape.length < 2 || !stops || stops.length < 2) return null;
+          return { routeKey: key, shape, stops };
         })
-        .filter((input) => input.chunks.length > 0);
+        .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
 
-      // 先用「點到線＋方向」去重（可處理車道偏移），再串成連續路網。
-      // 半徑不宜過大：太大時會把相距 15～35m 的不同車道／平行道路吃掉，
-      // 畫出來的線就會偏離實際路線。
-      const deduped = dedupeByProximity(inputs, {
-        radiusMeters: 15,
-        maxHeadingDiffDeg: 35,
-        maxBridgePoints: 3,
+      const slices = fuseRoutesByStops(fusionRoutes, {
+        keepToleranceMeters: 12,
+        maxSnapMeters: 25,
       });
-      const dedupedInputs = inputs
-        .map((input) => ({ key: input.key, chunks: deduped.get(input.key) ?? [] }))
+
+      const spacing = Math.max(30, settings.coverageToleranceMeters);
+      const inputs = slices
+        .map((slice) => ({
+          key: slice.routeKey,
+          routeKeys: [slice.routeKey, ...slice.extraRouteKeys],
+          chunks: computeCoverage(slice.points, matcher, {
+            sampleSpacingMeters: spacing,
+          }),
+        }))
         .filter((input) => input.chunks.length > 0);
 
-      const chains = buildRoadNetwork(dedupedInputs, {
+      const chains = buildRoadNetwork(inputs, {
         resampleSpacingMeters: 30,
         // 合併半徑必須小於對向車道的間距，否則雙向路線會在節點被黏在一起，
         // 畫面上會出現跨車道的鋸齒／交叉線
@@ -545,6 +553,8 @@ export default function AppShell() {
     allData,
     allChunks,
     settings.mergeOverlappingRoutes,
+    settings.coverageToleranceMeters,
+    matcher,
     candidateRoutes,
   ]);
 

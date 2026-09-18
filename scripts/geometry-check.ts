@@ -18,7 +18,8 @@ import {
   buildExploredIndex,
   computeCoverage,
   createToleranceMatcher,
-  dedupeByProximity,
+  fuseRoutesByStops,
+  haversineMeters,
   maxStopSnapDistance,
   pathLengthMeters,
   sliceShapeBetweenStops,
@@ -262,59 +263,81 @@ assert.deepEqual(
 
 console.log("✓ 方向無關：反向行駛過的幾何同樣算已走過");
 
-// ---------- 6. 合併路網前的幾何去重 ----------
-// 重現「轉彎後出現空白」的回歸情境：
-//   大路線（點較多，先處理）先向東到 x=300 後向北轉；
-//   直行路線沿同一條路往東，過了路口後繼續直行。
-//   直行路線在重疊段應被去重，但 x>300 的部分必須保留，
-//   而且要用路口附近的點接回，不能留下缺口。
+// ---------- 6. 站牌區間融合（合併路網用） ----------
+// 重現「路口／轉彎後出現空白」的回歸情境：
+//   路線 A 沿同一條路依序停靠 S1~S4；
+//   路線 B 跳過 S2（同一條路），S1→S3→S4；
+//   路線 C 在 S1→S2 之間繞道北方 40m。
+// 期望：
+//   - A、B 重疊的路段只畫一條（B 的路線記在代表片段上）
+//   - C 的繞道不會被吃掉
+//   - 所有片段端點都精確落在站牌座標（共用錨點）→ 路口不會有缺口
 
-const mPerDegLon = 111320 * Math.cos((BASE_LAT * Math.PI) / 180);
-const toXMeters = (point: LatLon) => (point.lon - BASE_LON) * mPerDegLon;
+const stopS1 = makeStop("S1", offset(0, 0), 1);
+const stopS2 = makeStop("S2", offset(100, 0), 2);
+const stopS3 = makeStop("S3", offset(200, 0), 3);
+const stopS4 = makeStop("S4", offset(300, 0), 4);
 
-const bigRoute: LatLon[] = [];
-for (let x = 0; x <= 300; x += 10) bigRoute.push(offset(x, 0));
-for (let y = 10; y <= 300; y += 10) bigRoute.push(offset(300, y));
-
-const straightRoute: LatLon[] = [];
-for (let x = 0; x <= 600; x += 30) straightRoute.push(offset(x, 0));
-
-const deduped = dedupeByProximity(
+const fused = fuseRoutesByStops(
   [
-    { key: "big", chunks: [{ points: bigRoute, covered: false }] },
-    { key: "straight", chunks: [{ points: straightRoute, covered: false }] },
-    { key: "parallel", chunks: [{ points: [offset(0, 15), offset(150, 15), offset(300, 15)], covered: false }] },
+    {
+      routeKey: "C:0",
+      shape: [offset(0, 0), offset(50, 40), offset(100, 0)],
+      stops: [stopS1, stopS2],
+    },
+    {
+      routeKey: "A:0",
+      shape: [
+        offset(0, 0),
+        offset(50, 0),
+        offset(100, 0),
+        offset(150, 0),
+        offset(200, 0),
+        offset(250, 0),
+        offset(300, 0),
+      ],
+      stops: [stopS1, stopS2, stopS3, stopS4],
+    },
+    {
+      routeKey: "B:0",
+      shape: [offset(0, 0), offset(100, 0), offset(200, 0), offset(300, 0)],
+      stops: [stopS1, stopS3, stopS4],
+    },
   ],
-  { radiusMeters: 35, maxHeadingDiffDeg: 35, maxBridgePoints: 3 },
+  { keepToleranceMeters: 12, maxSnapMeters: 25 },
 );
 
-const straightPieces = deduped.get("straight") ?? [];
-const straightPoints = straightPieces.flatMap((piece) => piece.points);
+const stopPositions = [stopS1, stopS2, stopS3, stopS4];
+const isStopPosition = (point: LatLon) =>
+  stopPositions.some((stop) => haversineMeters(point, stop) < 0.5);
+
 assert.ok(
-  straightPoints.some((point) => toXMeters(point) > 590),
-  "轉彎點之後的路段必須保留（不可被誤判為已畫過）",
+  fused.some((slice) => slice.points.some((point) => point.lat > offset(0, 35).lat)),
+  "繞道（不同走法）的路段必須保留",
 );
 assert.ok(
-  straightPieces.some((piece) =>
-    piece.points.some((point, index) => {
-      if (index === 0) return false;
-      const previousX = toXMeters(piece.points[index - 1]);
-      const x = toXMeters(point);
-      return previousX >= 290 && previousX <= 310 && x >= 320 && x <= 340;
-    }),
+  fused.some(
+    (slice) => slice.routeKey === "B:0" || slice.extraRouteKeys.includes("B:0"),
   ),
-  "離開重疊路段時應以路口附近的點接回，不可留下缺口",
+  "被融合路段的路線 key 應保留在代表片段上（popup 用）",
 );
-assert.equal(
-  (deduped.get("parallel") ?? []).length,
-  0,
-  "與已畫過道路平行且重疊的路線應被去重",
+assert.ok(
+  fused.every(
+    (slice) =>
+      isStopPosition(slice.points[0]) &&
+      isStopPosition(slice.points[slice.points.length - 1]),
+  ),
+  "融合後所有片段端點都必須精確落在站牌座標（共用錨點）",
 );
+const s1ToS2 = fused.filter(
+  (slice) =>
+    haversineMeters(slice.points[0], stopS1) < 0.5 &&
+    haversineMeters(slice.points[slice.points.length - 1], stopS2) < 0.5,
+);
+assert.equal(s1ToS2.length, 2, "S1→S2 應保留直行與繞道各一條");
 
 console.log(
-  "✓ 幾何去重：重疊路段被去重、過彎後保留並接回既有線段（pieces=" +
-    straightPieces.map((piece) => piece.points.length).join(",") +
-    "）",
+  `✓ 站牌融合：重疊只畫一條（片段 ${fused.length}）、繞道保留、端點精準錨定站牌`,
 );
 
 // ---------- 7. 真實 TDX 資料（可選） ----------

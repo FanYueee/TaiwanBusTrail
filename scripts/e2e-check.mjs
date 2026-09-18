@@ -249,15 +249,59 @@ try {
   );
   await page.screenshot({ path: `${SHOT_DIR}/e2e-4-all-routes.png` });
 
-  // 點擊路網應顯示行經路線
+  // 點擊路網應顯示行經路線（掃描 Canvas 找出線上的像素；路網與選取路線共用 Canvas，
+  // 因此逐點嘗試，直到出現路網彈窗為止）
   let networkPopupText = null;
-  for (const position of [{ x: 900, y: 450 }, { x: 750, y: 500 }, { x: 1050, y: 380 }]) {
-    await page.mouse.click(position.x, position.y);
-    await page.waitForTimeout(600);
-    const popup = page.locator(".leaflet-popup-content").first();
-    if (await popup.count()) {
-      networkPopupText = await popup.textContent();
-      break;
+  const candidates = await page.evaluate(() => {
+    const canvas = document.querySelector(".leaflet-overlay-pane canvas");
+    if (!canvas) return [];
+    const context = canvas.getContext("2d");
+    if (!context) return [];
+    const { width, height } = canvas;
+    const data = context.getImageData(0, 0, width, height).data;
+    const rect = canvas.getBoundingClientRect();
+    // 只掃描畫面上可見、且不會被左側面板擋住的區域
+    const x0 = Math.max(10, Math.ceil(420 - rect.x));
+    const x1 = Math.min(width, Math.floor(window.innerWidth - rect.x - 10));
+    const y0 = Math.max(10, Math.ceil(-rect.y + 10));
+    const y1 = Math.min(height, Math.floor(window.innerHeight - rect.y - 10));
+    const points = [];
+    for (let y = y0; y < y1 && points.length < 40; y += 37) {
+      for (let x = x0; x < x1 && points.length < 40; x += 37) {
+        const index = (y * width + x) * 4;
+        const r = data[index];
+        const g = data[index + 1];
+        const b = data[index + 2];
+        const a = data[index + 3];
+        // 路網以 opacity 0.55（alpha≈140）繪製；選取路線為 0.9（alpha≈229），
+        // 用 alpha 區間挑出路網的線，避免點到選取路線的圖層
+        const isNetworkRed = a >= 110 && a <= 190 && r > 190 && r - g > 80 && g < 130;
+        const isNetworkGreen = a >= 110 && a <= 190 && g > 140 && g - r > 60 && r < 140;
+        if (isNetworkRed || isNetworkGreen) {
+          points.push({ x, y });
+          x += 90;
+        }
+      }
+    }
+    return points;
+  });
+  const canvasBox = await page.locator(".leaflet-overlay-pane canvas").boundingBox();
+  if (canvasBox) {
+    let attempts = 0;
+    for (const point of candidates) {
+      if (attempts++ >= 25) break;
+      await page.mouse.click(canvasBox.x + point.x, canvasBox.y + point.y);
+      await page.waitForTimeout(350);
+      const popup = page.locator(".leaflet-popup-content").first();
+      if ((await popup.count()) > 0) {
+        const text = (await popup.textContent()) ?? "";
+        if (text.includes("行經路線") || text.includes("路段")) {
+          networkPopupText = text;
+          break;
+        }
+      }
+      await page.keyboard.press("Escape");
+      await page.waitForTimeout(120);
     }
   }
   log("10", `點擊路網彈出：${networkPopupText?.trim().replace(/\s+/g, " ").slice(0, 60) ?? "(未命中)"}`);

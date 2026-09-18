@@ -32,6 +32,8 @@ const NODE_GRID_METERS = 50;
 
 export interface RoadNetworkInput {
   key: string;
+  /** 這條幾何要歸屬的路線 key 清單（popup 用）；預設為 [key] */
+  routeKeys?: string[];
   chunks: CoverageChunk[];
 }
 
@@ -175,21 +177,24 @@ export function buildRoadNetwork(
   const edgeIndex = new Map<string, number>();
   const adjacency = new Map<number, number[]>();
 
-  const addEdge = (a: number, b: number, covered: boolean, routeKey: string) => {
+  const addEdge = (a: number, b: number, covered: boolean, routeKeys: string[]) => {
     if (a === b) return;
     const key = a < b ? `${a}:${b}` : `${b}:${a}`;
     const existing = edgeIndex.get(key);
     if (existing !== undefined) {
       const edge = edges[existing];
       edge.covered = edge.covered || covered;
-      if (edge.keys.length < maxRouteKeys && !edge.keys.includes(routeKey)) {
-        edge.keys.push(routeKey);
+      for (const routeKey of routeKeys) {
+        if (edge.keys.length < maxRouteKeys && !edge.keys.includes(routeKey)) {
+          edge.keys.push(routeKey);
+        }
       }
       return;
     }
 
     const id = edges.length;
-    edges.push({ a, b, covered, keys: [routeKey] });
+    const keys = routeKeys.slice(0, maxRouteKeys);
+    edges.push({ a, b, covered, keys });
     edgeIndex.set(key, id);
     for (const node of [a, b]) {
       const list = adjacency.get(node);
@@ -203,13 +208,14 @@ export function buildRoadNetwork(
   );
 
   for (const input of sorted) {
+    const routeKeys = input.routeKeys ?? [input.key];
     for (const chunk of input.chunks) {
       if (chunk.points.length < 2) continue;
       const points = resample(chunk.points, resampleSpacing);
       let previousNode = resolveNode(points[0]);
       for (let i = 1; i < points.length; i++) {
         const node = resolveNode(points[i]);
-        addEdge(previousNode, node, chunk.covered, input.key);
+        addEdge(previousNode, node, chunk.covered, routeKeys);
         previousNode = node;
       }
     }
