@@ -16,10 +16,11 @@ export interface LoadRoutesResult {
 
 export async function loadRoutes(options: {
   ttlDays: number;
+  city?: string;
   force?: boolean;
 }): Promise<LoadRoutesResult> {
   if (!options.force) {
-    const cached = await getCachedRoutes(options.ttlDays);
+    const cached = await getCachedRoutes(options.ttlDays, options.city);
     // 舊版快取沒有業者欄位，視為過期重抓
     if (cached && cached.routes.every((route) => Array.isArray(route.operatorIDs))) {
       return { routes: cached.routes, fetchedAt: cached.fetchedAt, fromCache: true };
@@ -29,6 +30,6 @@ export async function loadRoutes(options: {
   const url = options.force ? "/api/tdx/routes?force=1" : "/api/tdx/routes";
   const response = await fetchTdxJson<{ routes: BusRoute[] }>(url);
   const fetchedAt = new Date().toISOString();
-  await putCachedRoutes(response.routes, fetchedAt);
+  await putCachedRoutes(response.routes, fetchedAt, options.city);
   return { routes: response.routes, fetchedAt, fromCache: false };
 }

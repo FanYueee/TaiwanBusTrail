@@ -386,4 +386,8 @@ input[type="range"] {
     height: 55dvh;
     flex: none;
   }
+
+  .panel-collapsed .map-wrap {
+    height: 100dvh;
+  }
 }

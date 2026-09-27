@@ -1,5 +1,6 @@
 # dependencies
 /node_modules
+/.venv-roads/
 
 # next.js
 /.next/
@@ -16,5 +17,10 @@
 *.tsbuildinfo
 next-env.d.ts
 
-# 預先下載的 TDX 圖資（由 npm run prefetch:tdx 產生，可重建）
-/data/tdx/
+# Only the runtime snapshot is published. OSM extracts and build intermediates stay local.
+/data/tdx/*
+!/data/tdx/meta.json
+!/data/tdx/routes.json
+!/data/tdx/shapes.json
+!/data/tdx/stops.json
+!/data/tdx/network.json

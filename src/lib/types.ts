@@ -68,6 +68,9 @@ export interface AppSettings {
   directionFilter: DirectionFilter;
   /** 是否顯示黃X（小黃公車）路線 */
   showHuangRoutes: boolean;
+  showCitizenMinibusRoutes: boolean;
+  showZidaRoutes: boolean;
+  showLishanRoutes: boolean;
   /** 業者篩選；"all" 表示全部 */
   operatorFilter: string;
   /** 全部路線總覽時，將同一條道路上的多條路線合併為一條路網繪製 */
@@ -85,6 +88,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   coverageToleranceMeters: 25,
   directionFilter: "outbound",
   showHuangRoutes: false,
+  showCitizenMinibusRoutes: false,
+  showZidaRoutes: false,
+  showLishanRoutes: false,
   operatorFilter: "all",
   mergeOverlappingRoutes: true,
   panelCollapsed: false,

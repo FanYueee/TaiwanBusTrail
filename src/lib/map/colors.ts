@@ -1,7 +1,7 @@
-/** 地圖顏色定義：紅色＝尚未走過、綠色＝已走過 */
+/** 地圖顏色定義：藍色＝尚未走過、綠色＝已走過 */
 
 export const COVERED_COLOR = "#16a34a";
-export const UNCOVERED_COLOR = "#dc2626";
+export const UNCOVERED_COLOR = "#172554";
 export const STOP_COLOR = "#1d4ed8";
 export const STOP_BORDER_COLOR = "#ffffff";
 export const ROUTE_SELECTED_WEIGHT = 6;
@@ -14,6 +14,9 @@ export const LEGEND_ITEMS = [
 
 export const TAICHUNG_CENTER: [number, number] = [24.1477, 120.6736];
 export const DEFAULT_ZOOM = 12;
+export const VECTOR_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
+export const VECTOR_ATTRIBUTION =
+  '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors | <a href="https://openfreemap.org/">OpenFreeMap</a>';
 export const OSM_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 export const OSM_ATTRIBUTION =
   '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';

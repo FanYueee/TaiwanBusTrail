@@ -7,6 +7,7 @@ import SettingsPanel from "./SettingsPanel";
 import type { AllRoutesState, LoadedRoute, PanelMessage, SliceInfo, TdxStatus } from "./types";
 import { LEGEND_ITEMS } from "@/lib/map/colors";
 import type { AppSettings, BusRoute, Direction, RideRecord } from "@/lib/types";
+import { cityName } from "@/lib/tdx/cityName";
 
 interface ControlPanelProps {
   tdxStatus: TdxStatus | null;
@@ -86,7 +87,7 @@ export default function ControlPanel({
   return (
     <aside className="panel">
       <header className="panel-header">
-        <h1>台中公車覆蓋地圖</h1>
+        <h1>{cityName(tdxStatus?.prefetch.city)}公車覆蓋地圖</h1>
         <p className="muted small">實際行駛線型・搭乘紀錄只存在本機</p>
         <div className="legend">
           {LEGEND_ITEMS.map((item) => (

@@ -1,8 +1,7 @@
 /**
  * TDX v2 Bus API 原始回應型別（僅列出本專案使用的欄位）
  *
- * 實際結構已由 `scripts/verify-tdx.mjs` 對台中市資料驗證，
- * 詳見 docs/tdx-verification.md。
+ * 欄位對應 TDX 提供的台中市公車資料。
  */
 
 export interface TdxName {

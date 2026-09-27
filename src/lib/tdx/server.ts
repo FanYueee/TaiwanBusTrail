@@ -1,7 +1,7 @@
 import "server-only";
 
 import fs from "node:fs/promises";
-import path from "node:path";
+import { tdxDataFile } from "./dataDir";
 
 import type { BusRoute, BusShape, BusStop, Direction, LatLon } from "@/lib/types";
 
@@ -17,8 +17,6 @@ import type { BusRoute, BusShape, BusStop, Direction, LatLon } from "@/lib/types
  *   - 不會受 TDX 速率限制（5 requests/分鐘）影響
  *   - 不會在背景偷偷把請求送到 TDX
  */
-
-const PREFETCH_DIR = path.join(process.cwd(), "data", "tdx");
 
 export class PrefetchMissingError extends Error {
   constructor(
@@ -36,6 +34,7 @@ export interface PrefetchedShapeEntry {
 
 export interface PrefetchMeta {
   city?: string;
+  mapCenter?: LatLon | null;
   prefetchedAt?: string;
   routeCount?: number;
   shapeCount?: number;
@@ -69,12 +68,12 @@ export async function loadPrefetched(
   if (prefetchedCache !== undefined) return prefetchedCache;
 
   const [routes, shapes, stops, meta] = await Promise.all([
-    readJsonFile<BusRoute[]>(path.join(PREFETCH_DIR, "routes.json")),
+    readJsonFile<BusRoute[]>(tdxDataFile("routes.json")),
     readJsonFile<Record<string, PrefetchedShapeEntry>>(
-      path.join(PREFETCH_DIR, "shapes.json"),
+      tdxDataFile("shapes.json"),
     ),
-    readJsonFile<Record<string, BusStop[]>>(path.join(PREFETCH_DIR, "stops.json")),
-    readJsonFile<PrefetchMeta>(path.join(PREFETCH_DIR, "meta.json")),
+    readJsonFile<Record<string, BusStop[]>>(tdxDataFile("stops.json")),
+    readJsonFile<PrefetchMeta>(tdxDataFile("meta.json")),
   ]);
 
   prefetchedCache =
@@ -84,6 +83,8 @@ export async function loadPrefetched(
 
 export interface PrefetchInfo {
   available: boolean;
+  city: string | null;
+  mapCenter: LatLon | null;
   prefetchedAt: string | null;
   routeCount: number;
   shapeCount: number;
@@ -96,6 +97,8 @@ export async function getPrefetchInfo(): Promise<PrefetchInfo> {
   if (!bundle) {
     return {
       available: false,
+      city: null,
+      mapCenter: null,
       prefetchedAt: null,
       routeCount: 0,
       shapeCount: 0,
@@ -111,6 +114,8 @@ export async function getPrefetchInfo(): Promise<PrefetchInfo> {
 
   return {
     available: true,
+    city: bundle.meta?.city ?? null,
+    mapCenter: bundle.meta?.mapCenter ?? null,
     prefetchedAt: bundle.meta?.prefetchedAt ?? null,
     routeCount: bundle.routes.length,
     shapeCount: entries.filter(([, entry]) => entry?.geometry).length,

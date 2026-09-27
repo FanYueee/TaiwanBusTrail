@@ -14,6 +14,8 @@ export class TdxRequestError extends Error {
 
 export interface TdxPrefetchInfo {
   available: boolean;
+  city: string | null;
+  mapCenter: { lat: number; lon: number } | null;
   prefetchedAt: string | null;
   routeCount: number;
   shapeCount: number;

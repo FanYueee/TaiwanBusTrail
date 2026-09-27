@@ -72,7 +72,7 @@ export default function SettingsPanel({
         </label>
         <p className="muted small">
           {prefetch?.available
-            ? `取消勾選即在地圖上顯示全部 ${routeCount || prefetch.routeCount} 條路線（紅／綠覆蓋總覽）`
+            ? `取消勾選即在地圖上顯示全部 ${routeCount || prefetch.routeCount} 條路線（藍／綠覆蓋總覽）`
             : "取消勾選會顯示已載入的路線；要顯示全部路線請先執行 npm run prefetch:tdx"}
         </p>
 
@@ -131,6 +131,37 @@ export default function SettingsPanel({
           顯示黃X 小黃公車
         </label>
 
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={settings.showCitizenMinibusRoutes}
+            onChange={(event) =>
+              onSettingsChange({ ...settings, showCitizenMinibusRoutes: event.target.checked })
+            }
+          />
+          顯示市民小巴
+        </label>
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={settings.showZidaRoutes}
+            onChange={(event) =>
+              onSettingsChange({ ...settings, showZidaRoutes: event.target.checked })
+            }
+          />
+          顯示自達路線
+        </label>
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={settings.showLishanRoutes}
+            onChange={(event) =>
+              onSettingsChange({ ...settings, showLishanRoutes: event.target.checked })
+            }
+          />
+          顯示梨山路線
+        </label>
+
         <label className="field">
           <span>公車業者</span>
           <select
@@ -148,7 +179,7 @@ export default function SettingsPanel({
           </select>
         </label>
         {showAll && allRoutesState.loading && (
-          <p className="muted small">正在載入全部線型…</p>
+          <p className="muted small">正在載入路網…</p>
         )}
         {showAll && allRoutesState.computing && (
           <p className="muted small">正在計算覆蓋狀態…</p>
@@ -163,6 +194,7 @@ export default function SettingsPanel({
                 : `已顯示 ${visibleRouteCount} 條路線（僅顯示有線型資料者）`}
             </p>
           )}
+        {showAll && networkMode && allRoutesState.qualityNote && <p className="muted small">{allRoutesState.qualityNote}</p>}
         {allRoutesState.error && <div className="message warn">{allRoutesState.error}</div>}
 
         <label className="checkbox">

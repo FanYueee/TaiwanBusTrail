@@ -1,5 +1,7 @@
 "use client";
 
+import { computeNetworkCoverage } from "@/lib/geometry/networkCoverage";
+
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -16,17 +18,16 @@ import type {
 
 import {
   buildExploredIndex,
-  buildRoadNetwork,
   computeCoverage,
   createToleranceMatcher,
-  fuseRoutesByStops,
   pathLengthMeters,
   sliceShapeBetweenStops,
   type CoverageChunk,
   type RoadNetworkChain,
 } from "@/lib/geometry";
 import { loadAllTdxData, type AllTdxData } from "@/lib/tdx/allRoutes";
-import { fetchTdxStatus } from "@/lib/tdx/apiClient";
+import { unpackNetwork, type PackedNetwork } from "@/lib/geometry/networkFormat";
+import { fetchTdxJson, fetchTdxStatus } from "@/lib/tdx/apiClient";
 import { loadRoutes } from "@/lib/tdx/routes";
 import { loadShape } from "@/lib/tdx/shapes";
 import { loadStops } from "@/lib/tdx/stops";
@@ -84,6 +85,14 @@ function boundsOfChunks(chunks: CoverageChunk[]): MapRouteData["bounds"] {
   return { south, west, north, east };
 }
 
+function routeTypeVisible(route: BusRoute, settings: AppSettings): boolean {
+  const name = route.routeName;
+  return (settings.showHuangRoutes || !isHuangRoute(name)) &&
+    (settings.showCitizenMinibusRoutes || !name.startsWith("市民小巴")) &&
+    (settings.showZidaRoutes || !name.startsWith("自達")) &&
+    (settings.showLishanRoutes || !name.startsWith("梨山"));
+}
+
 export default function AppShell() {
   const [tdxStatus, setTdxStatus] = useState<TdxStatus | null>(null);
   const [routeList, setRouteList] = useState<BusRoute[]>([]);
@@ -94,6 +103,7 @@ export default function AppShell() {
   const [toStopUID, setToStopUID] = useState("");
   const [rideRecords, setRideRecords] = useState<RideRecord[]>([]);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+  const [settingsReady, setSettingsReady] = useState(false);
   const [tdxLastUpdated, setTdxLastUpdated] = useState<string | null>(null);
   const [message, setMessage] = useState<PanelMessage | null>(null);
   const [busy, setBusy] = useState(false);
@@ -108,10 +118,12 @@ export default function AppShell() {
     error: null,
   });
   const [allNetwork, setAllNetwork] = useState<RoadNetworkChain[] | null>(null);
+  const [networkData, setNetworkData] = useState<{ routes: BusRoute[]; network: RoadNetworkChain[]; qualityNote: string; shapeHashes: Record<string, string> } | null>(null);
 
   const initialisedRef = useRef(false);
   const pendingForceRef = useRef(false);
   const ttlDays = tdxStatus?.cacheTtlDays ?? 7;
+  const city = tdxStatus?.prefetch.city ?? undefined;
 
   /** 取消「只顯示目前選擇路線」時，直接進入全部路線總覽 */
   const showAllRoutes = !settings.onlyShowSelectedRoute;
@@ -142,6 +154,8 @@ export default function AppShell() {
         }
       } catch (error) {
         setMessage({ kind: "error", text: (error as Error).message });
+      } finally {
+        setSettingsReady(true);
       }
     })();
   }, []);
@@ -152,7 +166,7 @@ export default function AppShell() {
     async (force: boolean) => {
       setLoadingRoutes(true);
       try {
-        const result = await loadRoutes({ ttlDays, force });
+        const result = await loadRoutes({ ttlDays, force, city });
         setRouteList(result.routes);
         if (force) {
           const now = new Date().toISOString();
@@ -164,7 +178,7 @@ export default function AppShell() {
         setLoadingRoutes(false);
       }
     },
-    [ttlDays],
+    [ttlDays, city],
   );
 
   useEffect(() => {
@@ -339,6 +353,7 @@ export default function AppShell() {
   // 載入整包預先下載資料
   useEffect(() => {
     if (!showAllRoutes) return;
+    if (settings.mergeOverlappingRoutes) return;
     if (tdxStatus === null) return;
 
     if (!tdxStatus.prefetch.available) {
@@ -371,10 +386,32 @@ export default function AppShell() {
         });
       }
     })();
-  }, [showAllRoutes, allData, allRoutesState.loading, tdxStatus]);
+  }, [showAllRoutes, settings.mergeOverlappingRoutes, allData, allRoutesState.loading, tdxStatus]);
+
+  // 合併模式只下載共用路網，不下載全部路線的重複線型與站牌。
+  useEffect(() => {
+    if (!settings.mergeOverlappingRoutes || networkData || !tdxStatus?.prefetch.available) return;
+    let cancelled = false;
+    setAllRoutesState({ loading: true, computing: false, error: null });
+    void fetchTdxJson<{ routes: BusRoute[]; network: PackedNetwork; reports: Record<string, { unmatched: number }>; shapeHashes: Record<string, string> }>("/api/tdx/network")
+      .then((data) => {
+        if (cancelled) return;
+        const incomplete = Object.values(data.reports).filter((report) => report.unmatched > 0);
+        const missing = incomplete.reduce((sum, report) => sum + report.unmatched, 0);
+        setNetworkData({ routes: data.routes, network: unpackNetwork(data.network), shapeHashes: data.shapeHashes, qualityNote: missing
+          ? `全市路網有 ${incomplete.length} 筆路線方向、${missing} 個取樣點無法連續匹配道路，未強行接線。可切換單一路線查看原始線型。`
+          : "" });
+        setAllRoutesState({ loading: false, computing: false, error: null });
+      })
+      .catch((error) => {
+        if (!cancelled) setAllRoutesState({ loading: false, computing: false, error: error.message });
+      });
+    return () => { cancelled = true; };
+  }, [showAllRoutes, settings.mergeOverlappingRoutes, networkData, tdxStatus]);
 
   // 計算全部路線的覆蓋狀態；切回單一路線模式時釋放記憶體
   useEffect(() => {
+    if (settings.mergeOverlappingRoutes) return;
     if (!showAllRoutes) {
       setAllChunks((prev) => (prev === null ? prev : null));
       setAllRoutesState((prev) =>
@@ -415,28 +452,29 @@ export default function AppShell() {
     return () => {
       cancelled = true;
     };
-  }, [showAllRoutes, allData, matcher, settings.coverageToleranceMeters]);
+  }, [showAllRoutes, settings.mergeOverlappingRoutes, allData, matcher, settings.coverageToleranceMeters]);
 
   const allRouteByKey = useMemo(() => {
     const map = new Map<string, BusRoute>();
-    if (allData) {
-      for (const route of allData.routes) {
+    const source = networkData ?? allData;
+    if (source) {
+      for (const route of source.routes) {
         map.set(routeKey(route.routeUID, route.direction), route);
       }
     }
     return map;
-  }, [allData]);
+  }, [allData, networkData]);
 
-  // 路線清單篩選（黃X、業者）
+  // 路線清單與總覽共用相同的路線類別篩選。
   const filteredRouteList = useMemo(
     () =>
       routeList.filter(
         (route) =>
-          (settings.showHuangRoutes || !isHuangRoute(route.routeName)) &&
+          routeTypeVisible(route, settings) &&
           (settings.operatorFilter === "all" ||
             route.operatorIDs.includes(settings.operatorFilter)),
       ),
-    [routeList, settings.showHuangRoutes, settings.operatorFilter],
+    [routeList, settings],
   );
   const hiddenRouteCount = routeList.length - filteredRouteList.length;
 
@@ -452,13 +490,14 @@ export default function AppShell() {
       .sort((a, b) => a.name.localeCompare(b.name, "zh-Hant"));
   }, [routeList]);
 
-  /** 全部路線模式下通過篩選（黃X、業者、方向）的路線 */
+  /** 全部路線模式下通過篩選（路線類別、業者、方向）的路線 */
   const candidateRoutes = useMemo(() => {
-    if (!allData) return [] as BusRoute[];
+    const source = settings.mergeOverlappingRoutes ? networkData : allData;
+    if (!source) return [] as BusRoute[];
 
-    let candidates = allData.routes.filter(
+    let candidates = source.routes.filter(
       (route) =>
-        (settings.showHuangRoutes || !isHuangRoute(route.routeName)) &&
+        routeTypeVisible(route, settings) &&
         (settings.operatorFilter === "all" ||
           route.operatorIDs.includes(settings.operatorFilter)),
     );
@@ -485,76 +524,52 @@ export default function AppShell() {
     return candidates;
   }, [
     allData,
-    settings.showHuangRoutes,
+    networkData,
+    settings.mergeOverlappingRoutes,
+    settings,
     settings.operatorFilter,
     settings.directionFilter,
   ]);
 
-  // 路網合併：以「連續站牌區間」為單位融合各路線幾何，再串成連續路網
-  // （站牌是共用錨點，同一站的線段端點會完全重合，路口不會有缺口）
+  // 幾何已預先建立；個人紀錄只在背景更新覆蓋狀態。
   useEffect(() => {
-    if (!showAllRoutes || !allData || !allChunks || !settings.mergeOverlappingRoutes) {
+    if (!showAllRoutes || !networkData || !settings.mergeOverlappingRoutes) {
       setAllNetwork((previous) => (previous === null ? previous : null));
       return;
     }
 
-    let cancelled = false;
+    const keys = new Set(candidateRoutes.map((route) => routeKey(route.routeUID, route.direction)));
+    const network = networkData.network.flatMap((chain) => {
+      const routeKeys = chain.routeKeys.filter((key) => keys.has(key));
+      return routeKeys.length ? [{ ...chain, routeKeys, sourceRouteKeys: chain.routeKeys }] : [];
+    });
+    if (rideRecords.length === 0) {
+      setAllNetwork(network);
+      setAllRoutesState({ loading: false, computing: false, error: null });
+      return;
+    }
     setAllRoutesState((previous) =>
       previous.computing ? previous : { ...previous, computing: true, error: null },
     );
 
-    void (async () => {
-      await new Promise((resolve) => setTimeout(resolve, 30));
-      if (cancelled) return;
-
-      const fusionRoutes = candidateRoutes
-        .map((route) => {
-          const key = routeKey(route.routeUID, route.direction);
-          const shape = allData.shapes[key]?.geometry;
-          const stops = allData.stops[key];
-          if (!shape || shape.length < 2 || !stops || stops.length < 2) return null;
-          return { routeKey: key, shape, stops };
-        })
-        .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
-
-      const slices = fuseRoutesByStops(fusionRoutes, {
-        keepToleranceMeters: 12,
-        maxSnapMeters: 25,
-      });
-
-      const spacing = Math.max(30, settings.coverageToleranceMeters);
-      const inputs = slices
-        .map((slice) => ({
-          key: slice.routeKey,
-          routeKeys: [slice.routeKey, ...slice.extraRouteKeys],
-          chunks: computeCoverage(slice.points, matcher, {
-            sampleSpacingMeters: spacing,
-          }),
-        }))
-        .filter((input) => input.chunks.length > 0);
-
-      const chains = buildRoadNetwork(inputs, {
-        resampleSpacingMeters: 30,
-        // 合併半徑必須小於對向車道的間距，否則雙向路線會在節點被黏在一起，
-        // 畫面上會出現跨車道的鋸齒／交叉線
-        mergeRadiusMeters: 6,
-      });
-
-      if (cancelled) return;
-      setAllNetwork(chains);
-      setAllRoutesState((previous) => ({ ...previous, computing: false }));
-    })();
-
-    return () => {
-      cancelled = true;
+    const worker = new Worker(new URL("../lib/geometry/coverage.worker.ts", import.meta.url));
+    worker.onmessage = (event: MessageEvent<{ network?: RoadNetworkChain[]; error?: string }>) => {
+      if (event.data.network) setAllNetwork(event.data.network);
+      setAllRoutesState({ loading: false, computing: false, error: event.data.error ?? null });
+      worker.terminate();
     };
+    worker.onerror = (event) => {
+      setAllRoutesState({ loading: false, computing: false, error: event.message || "覆蓋計算失敗" });
+      worker.terminate();
+    };
+    worker.postMessage({ network, records: rideRecords, tolerance: settings.coverageToleranceMeters, shapeHashes: networkData.shapeHashes });
+    return () => worker.terminate();
   }, [
     showAllRoutes,
-    allData,
-    allChunks,
+    networkData,
+    rideRecords,
     settings.mergeOverlappingRoutes,
     settings.coverageToleranceMeters,
-    matcher,
     candidateRoutes,
   ]);
 
@@ -562,6 +577,9 @@ export default function AppShell() {
     if (!showAllRoutes || !allNetwork || !settings.mergeOverlappingRoutes) return [];
     return allNetwork.map((chain) => ({
       points: chain.points,
+      level: chain.level,
+      fastRoad: chain.fastRoad,
+      ramp: chain.ramp,
       covered: chain.covered,
       routeNames: chain.routeKeys
         .map((key) => allRouteByKey.get(key))
@@ -573,14 +591,16 @@ export default function AppShell() {
   // ---------- 地圖資料 ----------
 
   const mapRoutes: MapRouteData[] = useMemo(() => {
-    if (showAllRoutes && allData) {
+    if (showAllRoutes && (settings.mergeOverlappingRoutes || allData)) {
       const selected = selectedKey ? loadedRoutes[selectedKey] : undefined;
       const routes: MapRouteData[] = [];
 
       if (settings.mergeOverlappingRoutes && allNetwork) {
         // 路網由 MapView 以 multi-polyline 繪製；這裡只回傳選取路線（含站牌）
         if (selectedKey && selected?.shape) {
-          const chunks = computeCoverage(selected.shape.geometry, matcher);
+          // 總覽的選取高亮亦使用同一套道路骨架，避免疊回有偏移的原始 Shape。
+          const chunks = allNetwork.filter((chain) => chain.routeKeys.includes(selectedKey))
+            .map((chain) => ({ points: chain.points, covered: chain.covered }));
           routes.push({
             routeKey: selectedKey,
             routeName: fullRouteName(selected.route),
@@ -597,6 +617,8 @@ export default function AppShell() {
         }
         return routes;
       }
+
+      if (settings.mergeOverlappingRoutes || !allData) return routes;
 
       // 未合併：每條候選路線各自繪製
       for (const route of candidateRoutes) {
@@ -637,7 +659,9 @@ export default function AppShell() {
       const key = routeKey(loaded.route.routeUID, loaded.route.direction);
       const isSelected = key === selectedKey;
       const hasMany = visible.length > 1;
-      const chunks = loaded.shape ? computeCoverage(loaded.shape.geometry, matcher) : [];
+      const chunks = settings.mergeOverlappingRoutes && networkData
+        ? computeNetworkCoverage(networkData.network.filter((chain) => chain.routeKeys.includes(key)), rideRecords, settings.coverageToleranceMeters, networkData.shapeHashes)
+        : loaded.shape ? computeCoverage(loaded.shape.geometry, matcher) : [];
       return {
         routeKey: key,
         routeName: fullRouteName(loaded.route),
@@ -663,16 +687,19 @@ export default function AppShell() {
     settings.onlyShowSelectedRoute,
     settings.mergeOverlappingRoutes,
     matcher,
+    networkData,
+    rideRecords,
+    settings.coverageToleranceMeters,
   ]);
 
   const visibleRouteCount =
-    showAllRoutes && allData && allChunks
+    showAllRoutes && ((settings.mergeOverlappingRoutes && allNetwork) || (allData && allChunks))
       ? networkChains.length > 0
         ? networkChains.length + mapRoutes.length
         : mapRoutes.length
       : null;
   const visibleMemberCount =
-    showAllRoutes && allData && allChunks ? candidateRoutes.length : null;
+    showAllRoutes && (networkData || allData) ? candidateRoutes.length : null;
 
   // ---------- 搭乘紀錄操作 ----------
 
@@ -879,6 +906,7 @@ export default function AppShell() {
       pendingForceRef.current = true;
       setLoadedRoutes({});
       setAllData(null);
+      setNetworkData(null);
       setAllChunks(null);
       setAllNetwork(null);
       setAllRoutesState({ loading: false, computing: false, error: null });
@@ -905,7 +933,7 @@ export default function AppShell() {
   }, []);
 
   return (
-    <div className="app">
+    <div className={`app${settings.panelCollapsed ? " panel-collapsed" : ""}`}>
       {!settings.panelCollapsed && (
       <ControlPanel
         tdxStatus={tdxStatus}
@@ -924,7 +952,7 @@ export default function AppShell() {
         rideRecords={rideRecords}
         busy={busy}
         message={message}
-        allRoutesState={allRoutesState}
+        allRoutesState={{ ...allRoutesState, qualityNote: settings.mergeOverlappingRoutes ? networkData?.qualityNote : undefined }}
         routeCount={filteredRouteList.length}
         visibleRouteCount={visibleRouteCount}
         visibleMemberCount={visibleMemberCount}
@@ -950,11 +978,14 @@ export default function AppShell() {
           type="button"
           className="panel-toggle"
           onClick={togglePanel}
+          disabled={!settingsReady}
           title={settings.panelCollapsed ? "顯示選單" : "收起選單"}
         >
           {settings.panelCollapsed ? "☰ 顯示選單" : "‹ 收起選單"}
         </button>
         <MapView
+          key={city ?? "pending"}
+          initialCenter={tdxStatus?.prefetch.mapCenter ?? undefined}
           routes={mapRoutes}
           network={networkChains.length > 0 ? networkChains : null}
           hideExploredChunks={settings.hideExploredSegments}
@@ -962,7 +993,7 @@ export default function AppShell() {
         />
         {(allRoutesState.loading || allRoutesState.computing) && showAllRoutes && (
           <div className="map-overlay">
-            {allRoutesState.loading ? "正在載入全部線型…" : "正在計算覆蓋狀態…"}
+            {allRoutesState.loading ? "正在載入路網…" : "正在計算覆蓋狀態…"}
           </div>
         )}
       </main>

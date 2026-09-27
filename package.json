@@ -7,14 +7,16 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "verify:tdx": "node scripts/verify-tdx.mjs",
     "prefetch:tdx": "node scripts/prefetch-tdx.mjs",
-    "check:geometry": "tsx scripts/geometry-check.ts",
-    "check:e2e": "node scripts/e2e-check.mjs"
+    "match:roads": "tsx scripts/match-roads.ts",
+    "build:network": "tsx scripts/build-network.ts",
+    "update:network": "npm run prefetch:tdx && npm run match:roads && npm run build:network"
   },
   "dependencies": {
+    "@maplibre/maplibre-gl-leaflet": "^0.1.4",
     "dexie": "^4.4.6",
     "leaflet": "^1.9.4",
+    "maplibre-gl": "6.11.2",
     "next": "^16.3.5",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
@@ -25,7 +27,6 @@
     "@types/node": "^22.20.3",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "playwright": "^1.63.0",
     "tsx": "^4.23.13",
     "typescript": "^5.9.3"
   }

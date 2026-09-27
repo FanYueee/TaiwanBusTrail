@@ -4,12 +4,12 @@ import type { CoverageChunk } from "@/lib/geometry/coverage";
 
 import { COVERED_COLOR, ROUTE_DIMMED_WEIGHT, ROUTE_SELECTED_WEIGHT, UNCOVERED_COLOR } from "./colors";
 
-/** 依「已走過 / 未走過」將 Shape 繪製為綠/紅折線 */
+/** 依「已走過 / 未走過」將 Shape 繪製為綠/藍折線 */
 
 export interface RouteLayerOptions {
   weight?: number;
   opacity?: number;
-  /** false 時只畫未走過（紅色）路段 */
+  /** false 時只畫未走過（藍色）路段 */
   showCovered?: boolean;
   popupHtml?: string;
   /** 路線數量多時傳入 Canvas renderer 以維持效能 */

@@ -8,7 +8,7 @@ import {
   segmentHeadingRadians,
 } from "./distance";
 import type { CoverageChunk } from "./coverage";
-import { SegmentGridIndex } from "./spatialIndex";
+import { metricCellCoordinates, metricCellRing, SegmentGridIndex } from "./spatialIndex";
 
 /**
  * 路網合併（Road network）
@@ -24,10 +24,6 @@ import { SegmentGridIndex } from "./spatialIndex";
  * popup 則列出每條鏈的來源路線。
  */
 
-const REF_LAT = 24.15;
-const M_PER_DEG_LAT = 110574;
-const M_PER_DEG_LON = 111320 * Math.cos((REF_LAT * Math.PI) / 180);
-
 const NODE_GRID_METERS = 50;
 
 export interface RoadNetworkInput {
@@ -38,6 +34,16 @@ export interface RoadNetworkInput {
 }
 
 export interface RoadNetworkChain {
+  /** Unfiltered membership for coverage when the ridden route is hidden by UI filters. */
+  sourceRouteKeys?: string[];
+  /** Grade retained in the browser for overpass ordering. */
+  level?: string;
+  /** Keep motorway and expressway mainlines distinct in the compact map. */
+  fastRoad?: boolean;
+  ramp?: boolean;
+  /** Offline display provenance; not needed in the packed browser payload. */
+  road?: string;
+  sourceEdgeIds?: string[];
   points: LatLon[];
   covered: boolean;
   routeKeys: string[];
@@ -113,8 +119,7 @@ function resample(points: LatLon[], spacingMeters: number): LatLon[] {
 }
 
 function cellKey(lat: number, lon: number, sizeMeters: number): string {
-  const cx = Math.floor((lon * M_PER_DEG_LON) / sizeMeters);
-  const cy = Math.floor((lat * M_PER_DEG_LAT) / sizeMeters);
+  const { cx, cy } = metricCellCoordinates({ lat, lon }, sizeMeters);
   return `${cx},${cy}`;
 }
 
@@ -143,8 +148,9 @@ export function buildRoadNetwork(
 
     let bestId = -1;
     let bestDistance = mergeRadius;
-    for (let dx = -1; dx <= 1; dx++) {
-      for (let dy = -1; dy <= 1; dy++) {
+    const ring = metricCellRing(mergeRadius, NODE_GRID_METERS, point.lat);
+    for (let dx = -ring; dx <= ring; dx++) {
+      for (let dy = -ring; dy <= ring; dy++) {
         const bucket = nodeBuckets.get(`${cx + dx},${cy + dy}`);
         if (!bucket) continue;
         for (const id of bucket) {

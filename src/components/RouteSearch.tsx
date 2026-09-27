@@ -6,7 +6,7 @@ import { directionLabel, fullRouteName, routeKey, type BusRoute } from "@/lib/ty
 
 interface RouteSearchProps {
   routeList: BusRoute[];
-  /** 因黃X／業者篩選而隱藏的路線數 */
+  /** 因路線類別／業者篩選而隱藏的路線數 */
   hiddenRouteCount: number;
   loading: boolean;
   selectedKey: string | null;
@@ -105,7 +105,7 @@ export default function RouteSearch({
           <p className="muted small">
             顯示 {results.length} / {routeList.length} 筆（去返程分開）
             {hiddenRouteCount > 0
-              ? `；另有 ${hiddenRouteCount} 筆因黃X／業者篩選隱藏`
+              ? `；另有 ${hiddenRouteCount} 筆因路線類別／業者篩選隱藏`
               : ""}
           </p>
         </>

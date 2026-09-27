@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * 預先下載台中市公車全部 Shape / StopOfRoute
+ * 預先下載指定縣市公車全部 Shape / StopOfRoute
  *
  * 執行：npm run prefetch:tdx
  *
@@ -16,12 +16,10 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
-const DATA_DIR = path.join(ROOT, "data", "tdx");
 
 const AUTH_URL =
   "https://tdx.transportdata.tw/auth/realms/TDXConnect/protocol/openid-connect/token";
 const API_BASE = "https://tdx.transportdata.tw/api/basic/v2/Bus";
-const CITY = "Taichung";
 
 const BATCH_SIZE = 50;
 /** TDX 限 5 requests/分鐘，保守 4/min */
@@ -51,6 +49,11 @@ function loadEnv() {
 }
 
 const env = loadEnv();
+const DATA_DIR = path.resolve(ROOT, env.TCBUS_DATA_DIR || "data/tdx");
+const CITY = env.TCBUS_CITY || "Taichung";
+if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(CITY)) {
+  throw new Error(`Invalid TCBUS_CITY: ${CITY}`);
+}
 if (!env.TDX_ACCESS_TOKEN && (!env.TDX_CLIENT_ID || !env.TDX_CLIENT_SECRET)) {
   console.error("找不到 TDX 憑證，請先在 .env.local 設定 TDX_CLIENT_ID / TDX_CLIENT_SECRET");
   process.exit(2);
@@ -112,6 +115,17 @@ async function tdxGet(resource, params) {
     throw new Error(`GET ${url} 失敗：HTTP ${res.status} ${text.slice(0, 200)}`);
   }
   throw new Error(`GET ${url} 失敗：已達重試上限`);
+}
+
+async function tdxGetAll(resource, params) {
+  const pageSize = 1000;
+  const rows = [];
+  for (let skip = 0; ; skip += pageSize) {
+    const page = await tdxGet(resource, { ...params, $top: String(pageSize), $skip: String(skip) });
+    if (!Array.isArray(page)) throw new Error(`${resource} 回應不是資料陣列`);
+    rows.push(...page);
+    if (page.length < pageSize) return rows;
+  }
 }
 
 // ---------- 幾何解析 ----------
@@ -245,18 +259,18 @@ function orFilter(uids) {
 
 async function main() {
   const startedAt = Date.now();
-  console.log("TDX 台中市公車線型預先下載");
+  console.log(`TDX ${CITY} 公車線型預先下載`);
   console.log("============================");
 
-  const rawRoutes = await tdxGet("Route", {
+  const rawRoutes = await tdxGetAll("Route", {
     $format: "JSON",
-    $top: "1000",
     $select:
       "RouteUID,RouteID,RouteName,DepartureStopNameZh,DestinationStopNameZh,SubRoutes,Operators,UpdateTime",
   });
   const routes = normalizeRoutes(rawRoutes);
-  const uniqueUIDs = [...new Set(routes.map((route) => route.routeUID))];
-  console.log(`✓ 路線 ${routes.length} 筆（${uniqueUIDs.length} 個 RouteUID）`);
+  if (!routes.length) throw new Error("TDX 沒有回傳可用路線，保留既有資料");
+  const uniqueUIDs = [...new Set(rawRoutes.map((route) => route.RouteUID).filter(Boolean))];
+  console.log(`✓ 路線 ${routes.length} 筆（${uniqueUIDs.length} 個主 RouteUID）`);
 
   const batches = [];
   for (let i = 0; i < uniqueUIDs.length; i += BATCH_SIZE) {
@@ -282,14 +296,14 @@ async function main() {
     const progress = `[${index + 1}/${batches.length}]`;
 
     try {
-      const shapeRows = await tdxGet("Shape", {
+      const shapeRows = await tdxGetAll("Shape", {
         $format: "JSON",
         $filter: orFilter(batch),
-        $top: String(BATCH_SIZE * 2 + 20),
       });
       for (const row of Array.isArray(shapeRows) ? shapeRows : []) {
-        if (!row?.RouteUID || (row.Direction !== 0 && row.Direction !== 1)) continue;
-        shapes[cacheKey(row.RouteUID, row.Direction)] = {
+        const uid = row?.SubRouteUID ?? row?.RouteUID;
+        if (!uid || (row.Direction !== 0 && row.Direction !== 1)) continue;
+        shapes[cacheKey(uid, row.Direction)] = {
           geometry: parseGeometry(row.Geometry ?? row.EncodedPolyline ?? null),
           updatedAt: row.UpdateTime ?? null,
         };
@@ -300,14 +314,14 @@ async function main() {
     }
 
     try {
-      const stopRows = await tdxGet("StopOfRoute", {
+      const stopRows = await tdxGetAll("StopOfRoute", {
         $format: "JSON",
         $filter: orFilter(batch),
-        $top: String(BATCH_SIZE * 2 + 20),
       });
       for (const row of Array.isArray(stopRows) ? stopRows : []) {
-        if (!row?.RouteUID || (row.Direction !== 0 && row.Direction !== 1)) continue;
-        stops[cacheKey(row.RouteUID, row.Direction)] = normalizeStops(row);
+        const uid = row?.SubRouteUID ?? row?.RouteUID;
+        if (!uid || (row.Direction !== 0 && row.Direction !== 1)) continue;
+        stops[cacheKey(uid, row.Direction)] = normalizeStops(row);
       }
     } catch (error) {
       warnings.push(`StopOfRoute batch ${index + 1} 失敗：${error.message}`);
@@ -335,10 +349,19 @@ async function main() {
     }
   }
 
+  if (expectedKeys.length && expectedKeys.every((key) => !shapes[key]?.geometry)) {
+    throw new Error("TDX 沒有回傳任何可用線型；請檢查 RouteUID／SubRouteUID 對應，保留既有資料");
+  }
+
   fs.mkdirSync(DATA_DIR, { recursive: true });
 
+  const stopPoints = Object.values(stops).flat();
+  const median = (values) => values.sort((a, b) => a - b)[Math.floor(values.length / 2)];
+  const mapCenter = stopPoints.length ? { lat: median(stopPoints.map((point) => point.lat)),
+    lon: median(stopPoints.map((point) => point.lon)) } : null;
   const meta = {
     city: CITY,
+    mapCenter,
     prefetchedAt: new Date().toISOString(),
     routeCount: routes.length,
     uniqueRouteUIDCount: uniqueUIDs.length,

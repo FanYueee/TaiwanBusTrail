@@ -8,8 +8,8 @@ import { haversineMeters, segmentHeadingRadians } from "./distance";
  * 目的：在「已走過幾何」可能包含數萬條線段時，
  * 仍能快速查詢某點附近是否有已走過的線段。
  *
- * 使用固定參考緯度（台中）將經緯度換算為公尺網格；
- * 台中市範圍內緯度變化造成的誤差 < 1%，可接受。
+ * 使用全球一致的墨卡托網格；查詢半徑依當地緯度換算，
+ * 因此不同縣市的公尺半徑不會受固定參考緯度影響。
  */
 
 export interface Segment {
@@ -25,17 +25,22 @@ export interface IndexedSegment extends Segment {
   lengthMeters: number;
 }
 
-const REF_LAT = 24.15;
-const M_PER_DEG_LAT = 110574;
-const M_PER_DEG_LON = 111320 * Math.cos((REF_LAT * Math.PI) / 180);
+const EARTH_RADIUS = 6378137;
+const RADIANS = Math.PI / 180;
 
 const DEFAULT_CELL_SIZE_M = 50;
 
-function cellCoordinates(point: LatLon, cellSize: number): { cx: number; cy: number } {
+export function metricCellCoordinates(point: LatLon, cellSize: number): { cx: number; cy: number } {
+  const latitude = Math.max(-85, Math.min(85, point.lat)) * RADIANS;
   return {
-    cx: Math.floor((point.lon * M_PER_DEG_LON) / cellSize),
-    cy: Math.floor((point.lat * M_PER_DEG_LAT) / cellSize),
+    cx: Math.floor((EARTH_RADIUS * point.lon * RADIANS) / cellSize),
+    cy: Math.floor((EARTH_RADIUS * Math.asinh(Math.tan(latitude))) / cellSize),
   };
+}
+
+export function metricCellRing(radiusMeters: number, cellSize: number, latitude: number): number {
+  const outerLatitude = Math.min(85, Math.abs(latitude) + radiusMeters / 110574);
+  return Math.max(0, Math.ceil(radiusMeters / (cellSize * Math.cos(outerLatitude * RADIANS))));
 }
 
 function cellKey(cx: number, cy: number): string {
@@ -63,8 +68,8 @@ export class SegmentGridIndex {
       lengthMeters: haversineMeters(segment.a, segment.b),
     };
 
-    const c1 = cellCoordinates(indexed.a, this.cellSize);
-    const c2 = cellCoordinates(indexed.b, this.cellSize);
+    const c1 = metricCellCoordinates(indexed.a, this.cellSize);
+    const c2 = metricCellCoordinates(indexed.b, this.cellSize);
     const minX = Math.min(c1.cx, c2.cx);
     const maxX = Math.max(c1.cx, c2.cx);
     const minY = Math.min(c1.cy, c2.cy);
@@ -94,8 +99,8 @@ export class SegmentGridIndex {
     radiusMeters: number,
     test: (segment: IndexedSegment) => boolean,
   ): boolean {
-    const center = cellCoordinates(point, this.cellSize);
-    const ring = Math.max(0, Math.ceil(radiusMeters / this.cellSize));
+    const center = metricCellCoordinates(point, this.cellSize);
+    const ring = metricCellRing(radiusMeters, this.cellSize, point.lat);
 
     for (let dx = -ring; dx <= ring; dx++) {
       for (let dy = -ring; dy <= ring; dy++) {

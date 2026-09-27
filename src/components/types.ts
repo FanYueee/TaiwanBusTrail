@@ -43,12 +43,16 @@ export interface MapRouteData {
 }
 
 export interface AllRoutesState {
+  qualityNote?: string;
   loading: boolean;
   computing: boolean;
   error: string | null;
 }
 
 export interface NetworkChainData {
+  level?: string;
+  fastRoad?: boolean;
+  ramp?: boolean;
   points: LatLon[];
   covered: boolean;
   routeNames: string[];
