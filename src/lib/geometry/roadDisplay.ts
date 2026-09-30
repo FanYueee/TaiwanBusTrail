@@ -476,7 +476,9 @@ export function buildRoadDisplay(nativeGraph: ReferenceRoadGraph, memberships: R
         // Inner and outer carriageways have different arc lengths at a bend.
         // The dense leash test below, rather than a straight-road 1.4 ratio,
         // decides whether the complete gap stays in the same corridor.
-        if (Math.abs(span) < length * .5 || Math.abs(span) > length * 2) continue;
+        const shortTurn = length <= 35 && Math.abs(span) >= 1
+          && points.every((point) => (project(spine, point)?.distance ?? Infinity) <= 20);
+        if ((Math.abs(span) < length * .5 && !shortTurn) || Math.abs(span) > length * 2) continue;
         const projections = points.map((p) => project(spine, p));
         if (projections.some((p) => !p || p.distance > 35)) continue;
         // Independent nearest-point projections can reverse order on offset
@@ -949,6 +951,31 @@ export function buildRoadDisplay(nativeGraph: ReferenceRoadGraph, memberships: R
   if (diagnostics?.includeSpines) diagnostics.spines = spines.map((s, i) => ({ road: s.road, reference: s.points,
     center: s.center, anchors: s.anchors, sources: [...assignments].filter(([, a]) => a.spine === i).map(([id]) => graph.edges[id].id) }));
   const rampIds = new Set(graph.edges.filter((edge) => /^(motorway_link|trunk_link)$/.test(edge.way.tags.highway)).map((edge) => edge.id));
+  // The surface carriageway beside Guangming Overpass rejoins the bridge at
+  // its east end. Share the last stretch of display centreline so it does not
+  // draw a narrow, misleading triangle; native roads and grades stay intact.
+  const bridgeDeck = output.filter((chain) => chain.sourceEdgeIds?.some((id) =>
+    id.startsWith("212421302:") || id.startsWith("212421305:")));
+  const bridgeEnd = bridgeDeck.flatMap((chain) => chain.points).sort((a, b) => b.lon - a.lon)[0];
+  if (bridgeEnd) {
+    const deckSegments = bridgeDeck.flatMap((chain) => chain.points.slice(1).map((b, i) => ({ a: chain.points[i], b })))
+      .filter(({ a, b }) => Math.min(haversineMeters(a, bridgeEnd), haversineMeters(b, bridgeEnd)) <= 115);
+    for (const chain of output) {
+      if (chain.level !== "0|no|no" || roadFamily(chain.road ?? "") !== roadFamily("臺灣大道三段")
+        || !chain.sourceEdgeIds?.some((id) => id.startsWith("289080999:") || id.startsWith("372351434:"))) continue;
+      chain.points = chain.points.map((point) => {
+        const fromEnd = haversineMeters(point, bridgeEnd);
+        if (point.lat < bridgeEnd.lat || point.lon > bridgeEnd.lon || fromEnd >= 110) return point;
+        let closest: LatLon | null = null, distance = Infinity;
+        for (const segment of deckSegments) {
+          const projection = projectPointOnSegment(point, segment.a, segment.b);
+          if (projection.distanceMeters < distance) { closest = projection.closest; distance = projection.distanceMeters; }
+        }
+        if (!closest || distance > 18) return point;
+        return interpolate(point, closest, Math.min(1, (110 - fromEnd) / 25));
+      });
+    }
+  }
   for (const chain of output) {
     chain.fastRoad = chain.sourceEdgeIds?.some((id) => classification.mainline.has(id)) ?? false;
     chain.ramp = !chain.fastRoad && (chain.sourceEdgeIds?.some((id) => rampIds.has(id)) ?? false);
